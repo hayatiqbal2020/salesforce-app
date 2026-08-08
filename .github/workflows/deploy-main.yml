@@ -1,0 +1,55 @@
+name: Deploy to Salesforce on Merge to Main
+
+# Runs automatically whenever a PR is merged (or a direct push happens) into main
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false   # never cancel an in-flight production deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Salesforce CLI
+        run: npm install --global @salesforce/cli
+
+      - name: Verify sf CLI install
+        run: sf --version
+
+      - name: Authenticate to Salesforce org via JWT
+        env:
+          SF_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
+        run: |
+          echo "$SF_JWT_KEY" > ./server.key
+          sf org login jwt \
+            --client-id "${{ secrets.SF_CONSUMER_KEY }}" \
+            --jwt-key-file ./server.key \
+            --username "${{ secrets.SF_USERNAME }}" \
+            --instance-url "${{ secrets.SF_INSTANCE_URL }}" \
+            --alias target-org \
+            --set-default
+          rm ./server.key
+
+      - name: Deploy to Salesforce org
+        run: |
+          sf project deploy start \
+            --source-dir force-app \
+            --target-org target-org \
+            --test-level RunLocalTests \
+            --wait 60
+
+      - name: Post deployment result
+        if: always()
+        run: echo "Deployment step completed with status ${{ job.status }}"
