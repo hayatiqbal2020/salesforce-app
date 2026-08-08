@@ -30,11 +30,19 @@ jobs:
       - name: Verify sf CLI install
         run: sf --version
 
-      - name: Authenticate to Salesforce org
+      - name: Authenticate to Salesforce org via JWT
+        env:
+          SF_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
         run: |
-          echo "${{ secrets.SFDX_AUTH_URL }}" > ./SFDX_AUTH_URL.txt
-          sf org login sfdx-url --sfdx-url-file ./SFDX_AUTH_URL.txt --alias target-org --set-default
-          rm ./SFDX_AUTH_URL.txt
+          echo "$SF_JWT_KEY" > ./server.key
+          sf org login jwt \
+            --client-id "${{ secrets.SF_CONSUMER_KEY }}" \
+            --jwt-key-file ./server.key \
+            --username "${{ secrets.SF_USERNAME }}" \
+            --instance-url "${{ secrets.SF_INSTANCE_URL }}" \
+            --alias target-org \
+            --set-default
+          rm ./server.key
 
       - name: Run static code analysis (optional but recommended)
         run: |
