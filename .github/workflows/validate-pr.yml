@@ -49,12 +49,13 @@ jobs:
           sf plugins install @salesforce/sfdx-scanner
           sf scanner run --target "force-app" --format table || true
 
-      - name: Validate deployment (check-only, no actual deploy)
+      - name: Validate deployment (dry-run, no actual deploy)
         run: |
-          sf project deploy validate \
+          sf project deploy start \
             --source-dir force-app \
             --target-org target-org \
             --test-level NoTestRun \
+            --dry-run \
             --wait 30
 
       - name: Post validation result
