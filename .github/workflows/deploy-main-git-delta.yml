@@ -55,17 +55,18 @@ jobs:
             --output delta/ \
             --generate-delta
 
-      - name: Check if delta has any changes
+      - name: Check delta contents
         id: check_delta
         run: |
-          if [ -d "delta/force-app" ] && [ "$(find delta/force-app -type f | wc -l)" -gt 0 ]; then
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-          fi
+          ADDS=$(grep -c "<members>" delta/package/package.xml 2>/dev/null || echo 0)
+          DELETES=$(grep -c "<members>" delta/destructiveChanges/destructiveChanges.xml 2>/dev/null || echo 0)
+          echo "has_additions=$([ "$ADDS" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "has_deletions=$([ "$DELETES" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "Additions/modifications: $ADDS"
+          echo "Deletions: $DELETES"
 
-      - name: Deploy delta to Salesforce org
-        if: steps.check_delta.outputs.has_changes == 'true'
+      - name: Deploy additions and modifications
+        if: steps.check_delta.outputs.has_additions == 'true'
         run: |
           sf project deploy start \
             --source-dir delta/force-app \
@@ -73,8 +74,17 @@ jobs:
             --test-level RunLocalTests \
             --wait 60
 
+      - name: Deploy destructive changes (deletions)
+        if: steps.check_delta.outputs.has_deletions == 'true'
+        run: |
+          sf project deploy start \
+            --manifest delta/destructiveChanges/package.xml \
+            --post-destructive-changes delta/destructiveChanges/destructiveChanges.xml \
+            --target-org target-org \
+            --wait 60
+
       - name: No changes to deploy
-        if: steps.check_delta.outputs.has_changes == 'false'
+        if: steps.check_delta.outputs.has_additions == 'false' && steps.check_delta.outputs.has_deletions == 'false'
         run: echo "No metadata changes detected — skipping deploy."
 
       - name: Post deployment result
