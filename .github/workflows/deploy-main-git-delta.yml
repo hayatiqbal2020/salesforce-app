@@ -1,0 +1,92 @@
+name: Deploy to Salesforce on Merge to Main
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history for git diff
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Salesforce CLI
+        run: npm install --global @salesforce/cli
+
+      - name: Install sfdx-git-delta plugin
+        run: sf plugins install sfdx-git-delta
+
+      - name: Verify sf CLI install
+        run: sf --version
+
+      - name: Authenticate to Salesforce org via JWT
+        env:
+          SF_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
+        run: |
+          echo "$SF_JWT_KEY" > ./server.key
+          sf org login jwt \
+            --client-id "${{ secrets.SF_CONSUMER_KEY }}" \
+            --jwt-key-file ./server.key \
+            --username "${{ secrets.SF_USERNAME }}" \
+            --instance-url "${{ secrets.SF_INSTANCE_URL }}" \
+            --alias target-org \
+            --set-default
+          rm ./server.key
+
+      - name: Generate delta package
+        run: |
+          mkdir -p delta
+          sf sgd source delta \
+            --to "HEAD" \
+            --from "HEAD~1" \
+            --output delta/ \
+            --generate-delta
+
+      - name: Check delta contents
+        id: check_delta
+        run: |
+          ADDS=$(grep -c "<members>" delta/package/package.xml 2>/dev/null || echo 0)
+          DELETES=$(grep -c "<members>" delta/destructiveChanges/destructiveChanges.xml 2>/dev/null || echo 0)
+          echo "has_additions=$([ "$ADDS" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "has_deletions=$([ "$DELETES" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "Additions/modifications: $ADDS"
+          echo "Deletions: $DELETES"
+
+      - name: Deploy additions and modifications
+        if: steps.check_delta.outputs.has_additions == 'true'
+        run: |
+          sf project deploy start \
+            --source-dir delta/force-app \
+            --target-org target-org \
+            --test-level RunLocalTests \
+            --wait 60
+
+      - name: Deploy destructive changes (deletions)
+        if: steps.check_delta.outputs.has_deletions == 'true'
+        run: |
+          sf project deploy start \
+            --manifest delta/destructiveChanges/package.xml \
+            --post-destructive-changes delta/destructiveChanges/destructiveChanges.xml \
+            --target-org target-org \
+            --wait 60
+
+      - name: No changes to deploy
+        if: steps.check_delta.outputs.has_additions == 'false' && steps.check_delta.outputs.has_deletions == 'false'
+        run: echo "No metadata changes detected — skipping deploy."
+
+      - name: Post deployment result
+        if: always()
+        run: echo "Deployment step completed with status ${{ job.status }}"
